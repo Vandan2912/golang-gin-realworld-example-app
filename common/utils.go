@@ -3,8 +3,10 @@ package common
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -57,36 +59,64 @@ func GenToken(id uint) string {
 }
 
 // My own Error type that will help return my customized Error info
+// following the RealWorld spec format:
 //
-//	{"database": {"hello":"no such table", error: "not_exists"}}
+//	{"errors": {"email": ["can't be blank"]}}
 type CommonError struct {
-	Errors map[string]interface{} `json:"errors"`
+	Errors map[string][]string `json:"errors"`
+}
+
+// Maps Go struct field names to their JSON counterparts for error responses.
+var errorFieldNames = map[string]string{
+	"Tags": "tagList",
+}
+
+func errorFieldName(field string) string {
+	if name, ok := errorFieldNames[field]; ok {
+		return name
+	}
+	return strings.ToLower(field)
+}
+
+func errorMessageForTag(v validator.FieldError) string {
+	switch v.Tag() {
+	case "required":
+		return "can't be blank"
+	case "min":
+		return fmt.Sprintf("is too short (minimum is %v characters)", v.Param())
+	case "max":
+		return fmt.Sprintf("is too long (maximum is %v characters)", v.Param())
+	default:
+		return "is invalid"
+	}
 }
 
 // To handle the error returned by c.Bind in gin framework
 // https://github.com/go-playground/validator/blob/v9/_examples/translations/main.go
 func NewValidatorError(err error) CommonError {
 	res := CommonError{}
-	res.Errors = make(map[string]interface{})
-	errs := err.(validator.ValidationErrors)
+	res.Errors = make(map[string][]string)
+	var errs validator.ValidationErrors
+	if !errors.As(err, &errs) {
+		res.Errors["body"] = []string{"is invalid"}
+		return res
+	}
 	for _, v := range errs {
-		// can translate each error one at a time.
-		//fmt.Println("gg",v.NameNamespace)
-		if v.Param() != "" {
-			res.Errors[v.Field()] = fmt.Sprintf("{%v: %v}", v.Tag(), v.Param())
-		} else {
-			res.Errors[v.Field()] = fmt.Sprintf("{key: %v}", v.Tag())
-		}
-
+		field := errorFieldName(v.Field())
+		res.Errors[field] = append(res.Errors[field], errorMessageForTag(v))
 	}
 	return res
 }
 
 // Wrap the error info in an object
 func NewError(key string, err error) CommonError {
+	return NewErrorMessage(key, err.Error())
+}
+
+// Wrap a plain error message in the RealWorld errors format
+func NewErrorMessage(key string, message string) CommonError {
 	res := CommonError{}
-	res.Errors = make(map[string]interface{})
-	res.Errors[key] = err.Error()
+	res.Errors = map[string][]string{key: {message}}
 	return res
 }
 

@@ -17,6 +17,12 @@ type ArticleModelValidator struct {
 	articleModel ArticleModel `json:"-"`
 }
 
+// makeSlug wraps slug.Make so handlers can use it without importing the slug
+// package under a name that would shadow local variables.
+func makeSlug(title string) string {
+	return slug.Make(title)
+}
+
 func NewArticleModelValidator() ArticleModelValidator {
 	return ArticleModelValidator{}
 }

@@ -524,7 +524,7 @@ var articleRequestTests = []struct {
 		"/api/articles/updated-title/comments/1",
 		"DELETE",
 		``,
-		http.StatusOK,
+		http.StatusNoContent,
 		``,
 		"delete comment should succeed",
 	},
@@ -548,7 +548,7 @@ var articleRequestTests = []struct {
 		"/api/articles/updated-title",
 		"DELETE",
 		``,
-		http.StatusOK,
+		http.StatusNoContent,
 		``,
 		"delete article should succeed",
 	},
@@ -559,7 +559,7 @@ var articleRequestTests = []struct {
 		"GET",
 		``,
 		http.StatusNotFound,
-		`"articles":"Invalid slug"`,
+		`"article":\["not found"\]`,
 		"deleted article should return 404",
 	},
 	// Test favorite non-existent article
@@ -571,7 +571,7 @@ var articleRequestTests = []struct {
 		"POST",
 		``,
 		http.StatusNotFound,
-		`"articles":"Invalid slug"`,
+		`"article":\["not found"\]`,
 		"favorite non-existent article should return 404",
 	},
 	// Test unfavorite non-existent article
@@ -583,7 +583,7 @@ var articleRequestTests = []struct {
 		"DELETE",
 		``,
 		http.StatusNotFound,
-		`"articles":"Invalid slug"`,
+		`"article":\["not found"\]`,
 		"unfavorite non-existent article should return 404",
 	},
 	// Test create article with invalid data
@@ -607,7 +607,7 @@ var articleRequestTests = []struct {
 		"POST",
 		`{"comment":{"body":"Test"}}`,
 		http.StatusNotFound,
-		`"comment":"Invalid slug"`,
+		`"article":\["not found"\]`,
 		"create comment on non-existent article should return 404",
 	},
 	// Test get comments on non-existent article
@@ -617,7 +617,7 @@ var articleRequestTests = []struct {
 		"GET",
 		``,
 		http.StatusNotFound,
-		`"comments":"Invalid slug"`,
+		`"article":\["not found"\]`,
 		"get comments on non-existent article should return 404",
 	},
 	// Test update non-existent article
@@ -629,10 +629,10 @@ var articleRequestTests = []struct {
 		"PUT",
 		`{"article":{"title":"Test"}}`,
 		http.StatusNotFound,
-		`"articles":"Invalid slug"`,
+		`"article":\["not found"\]`,
 		"update non-existent article should return 404",
 	},
-	// Test delete non-existent article (GORM delete returns OK even if not found)
+	// Test delete non-existent article
 	{
 		func(req *http.Request) {
 			common.HeaderTokenMock(req, 1)
@@ -640,9 +640,9 @@ var articleRequestTests = []struct {
 		"/api/articles/non-existent",
 		"DELETE",
 		``,
-		http.StatusOK,
-		``,
-		"delete non-existent article returns OK (soft delete behavior)",
+		http.StatusNotFound,
+		`"article":\["not found"\]`,
+		"delete non-existent article returns 404",
 	},
 	// Test delete comment with invalid id
 	{
@@ -653,8 +653,8 @@ var articleRequestTests = []struct {
 		"DELETE",
 		``,
 		http.StatusNotFound,
-		`"comment":"Invalid id"`,
-		"delete comment with invalid id should return 404",
+		`"article":\["not found"\]`,
+		"delete comment on unknown article should return 404",
 	},
 }
 
@@ -701,7 +701,7 @@ func TestCreateArticleRequiredFields(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "Missing body should return 422")
-	asserts.Contains(w.Body.String(), "Body", "Error should mention Body field")
+	asserts.Contains(w.Body.String(), "body", "Error should mention body field")
 
 	// Test missing description field
 	req, _ = http.NewRequest("POST", "/api/articles", bytes.NewBufferString(`{"article":{"title":"Test Title","body":"Test Body"}}`))
@@ -710,7 +710,7 @@ func TestCreateArticleRequiredFields(t *testing.T) {
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "Missing description should return 422")
-	asserts.Contains(w.Body.String(), "Description", "Error should mention Description field")
+	asserts.Contains(w.Body.String(), "description", "Error should mention description field")
 
 	// Test valid article creation
 	req, _ = http.NewRequest("POST", "/api/articles", bytes.NewBufferString(`{"article":{"title":"Test Title","description":"Test Description","body":"Test Body"}}`))
@@ -747,7 +747,7 @@ func TestCreateCommentRequiredFields(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "Missing body should return 422")
-	asserts.Contains(w.Body.String(), "Body", "Error should mention Body field")
+	asserts.Contains(w.Body.String(), "body", "Error should mention body field")
 
 	// Test valid comment creation - should return 201 per OpenAPI spec
 	req, _ = http.NewRequest("POST", fmt.Sprintf("/api/articles/%s/comments", article.Slug), bytes.NewBufferString(`{"comment":{"body":"Test comment body"}}`))
@@ -895,7 +895,7 @@ func TestArticleDeleteEndpoint(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	asserts.Equal(http.StatusOK, w.Code, "Article delete should return 200")
+	asserts.Equal(http.StatusNoContent, w.Code, "Article delete should return 204")
 }
 
 func TestArticleFavoriteEndpoint(t *testing.T) {
@@ -977,7 +977,7 @@ func TestArticleCommentsEndpoint(t *testing.T) {
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	asserts.Equal(http.StatusOK, w.Code, "Comment delete should return 200")
+	asserts.Equal(http.StatusNoContent, w.Code, "Comment delete should return 204")
 }
 
 func TestArticleFeedEndpoint(t *testing.T) {
@@ -1063,7 +1063,7 @@ func TestArticleNotFoundErrors(t *testing.T) {
 	common.HeaderTokenMock(req, user.ID)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	asserts.Equal(http.StatusOK, w.Code, "Delete non-existent article returns 200")
+	asserts.Equal(http.StatusNotFound, w.Code, "Delete non-existent article returns 404")
 
 	// Test favorite non-existent article
 	req, _ = http.NewRequest("POST", "/api/articles/non-existent-slug/favorite", nil)
@@ -1242,7 +1242,7 @@ func TestCommentDeleteWithValidArticle(t *testing.T) {
 	common.HeaderTokenMock(req, user.ID)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	asserts.Equal(http.StatusOK, w.Code, "Delete existing comment should return 200")
+	asserts.Equal(http.StatusNoContent, w.Code, "Delete existing comment should return 204")
 }
 
 func TestSetTagsEmpty(t *testing.T) {
@@ -1389,7 +1389,7 @@ func TestArticleDeleteSuccess(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	asserts.Equal(http.StatusOK, w.Code, "Delete existing article should return 200")
+	asserts.Equal(http.StatusNoContent, w.Code, "Delete existing article should return 204")
 
 	// Verify article is deleted
 	foundArticle, err := FindOneArticle(&ArticleModel{Slug: slug})

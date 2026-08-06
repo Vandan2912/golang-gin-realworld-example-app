@@ -120,7 +120,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"username": "wangzitian0","email": "wzt@gg.cn","password": "jakejxke"}}`,
 		http.StatusCreated,
-		`{"user":{"username":"wangzitian0","email":"wzt@gg.cn","bio":"","image":"","token":"([a-zA-Z0-9-_.]{115})"}}`,
+		`{"user":{"username":"wangzitian0","email":"wzt@gg.cn","bio":null,"image":null,"token":"([a-zA-Z0-9-_.]{115})"}}`,
 		"valid data and should return StatusCreated",
 	},
 	{
@@ -128,9 +128,9 @@ var unauthRequestTests = []struct {
 		"/users/",
 		"POST",
 		`{"user":{"username": "wangzitian0","email": "wzt@gg.cn","password": "jakejxke"}}`,
-		http.StatusUnprocessableEntity,
-		`{"errors":{"database":"UNIQUE constraint failed: user_models.email"}}`,
-		"duplicated data and should return StatusUnprocessableEntity",
+		http.StatusConflict,
+		`{"errors":{"username":\["has already been taken"\]}}`,
+		"duplicated data and should return StatusConflict",
 	},
 	{
 		func(req *http.Request) {},
@@ -138,7 +138,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"username": "u","email": "wzt@gg.cn","password": "jakejxke"}}`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"Username":"{min: 4}"}}`,
+		`{"errors":{"username":\["is too short \(minimum is 4 characters\)"\]}}`,
 		"too short username should return error",
 	},
 	{
@@ -147,7 +147,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"username": "wangzitian0","email": "wzt@gg.cn","password": "j"}}`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"Password":"{min: 8}"}}`,
+		`{"errors":{"password":\["is too short \(minimum is 8 characters\)"\]}}`,
 		"too short password should return error",
 	},
 	{
@@ -156,7 +156,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"username": "wangzitian0","email": "wztgg.cn","password": "jakejxke"}}`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"Email":"{key: email}"}}`,
+		`{"errors":{"email":\["is invalid"\]}}`,
 		"email invalid should return error",
 	},
 
@@ -178,7 +178,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"email": "user112312312@linkedin.com","password": "password123"}}`,
 		http.StatusUnauthorized,
-		`{"errors":{"login":"Not Registered email or invalid password"}}`,
+		`{"errors":{"credentials":\["invalid"\]}}`,
 		"email not exist should return error info",
 	},
 	{
@@ -187,7 +187,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"email": "user1@linkedin.com","password": "password126"}}`,
 		http.StatusUnauthorized,
-		`{"errors":{"login":"Not Registered email or invalid password"}}`,
+		`{"errors":{"credentials":\["invalid"\]}}`,
 		"password error should return error info",
 	},
 	{
@@ -196,7 +196,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"email": "user1@linkedin.com","password": "passw"}}`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"Password":"{min: 8}"}}`,
+		`{"errors":{"password":\["is too short \(minimum is 8 characters\)"\]}}`,
 		"password too short should return error info",
 	},
 	{
@@ -205,7 +205,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		`{"user":{"email": "user1@linkedin.com","password": "passw"}}`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"Password":"{min: 8}"}}`,
+		`{"errors":{"password":\["is too short \(minimum is 8 characters\)"\]}}`,
 		"password too short should return error info",
 	},
 
@@ -332,7 +332,7 @@ var unauthRequestTests = []struct {
 		"PUT",
 		`{"user":{"password": "pas"}}`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"Password":"{min: 8}"}}`,
+		`{"errors":{"password":\["is too short \(minimum is 8 characters\)"\]}}`,
 		"current user profile should not be changed with error user info",
 	},
 
@@ -344,10 +344,10 @@ var unauthRequestTests = []struct {
 		},
 		"/user/",
 		"PUT",
-		`{"password": "password321"}}`,
+		`{"user":{"username": null}}`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"Email":"{key: required}","Username":"{key: required}"}}`,
-		"test database pk error for user update",
+		`{"errors":{"username":\["can't be blank"\]}}`,
+		"null username should be rejected on user update",
 	},
 	{
 		func(req *http.Request) {
@@ -355,10 +355,10 @@ var unauthRequestTests = []struct {
 		},
 		"/user/",
 		"PUT",
-		`{"user":{"username": "wangzitian0","email": "wzt@gg.cn","password": "jakejxke"}}`,
+		`{"user":`,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"database":"WHERE conditions required"}}`,
-		"cheat validator and test database connecting error for user update",
+		`{"errors":{"body":\["is invalid"\]}}`,
+		"malformed json body should be rejected on user update",
 	},
 	{
 		func(req *http.Request) {
@@ -373,7 +373,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		``,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"database":"no such table: follow_models"}}`,
+		`{"errors":{"database":\["no such table: follow_models"\]}}`,
 		"test database error for following",
 	},
 	{
@@ -384,7 +384,7 @@ var unauthRequestTests = []struct {
 		"DELETE",
 		``,
 		http.StatusUnprocessableEntity,
-		`{"errors":{"database":"no such table: follow_models"}}`,
+		`{"errors":{"database":\["no such table: follow_models"\]}}`,
 		"test database error for canceling following",
 	},
 	{
@@ -396,7 +396,7 @@ var unauthRequestTests = []struct {
 		"POST",
 		``,
 		http.StatusNotFound,
-		`{"errors":{"profile":"Invalid username"}}`,
+		`{"errors":{"profile":\["not found"\]}}`,
 		"following wrong user name should return errors",
 	},
 	{
@@ -407,7 +407,7 @@ var unauthRequestTests = []struct {
 		"DELETE",
 		``,
 		http.StatusNotFound,
-		`{"errors":{"profile":"Invalid username"}}`,
+		`{"errors":{"profile":\["not found"\]}}`,
 		"cancel following wrong user name should return errors",
 	},
 

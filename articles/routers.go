@@ -1,13 +1,15 @@
 package articles
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
+	"strconv"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
 	"github.com/gothinkster/golang-gin-realworld-example-app/users"
 	"gorm.io/gorm"
-	"net/http"
-	"strconv"
 )
 
 func ArticlesRegister(router *gin.RouterGroup) {
@@ -41,7 +43,8 @@ func ArticleCreate(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(err))
 		return
 	}
-	//fmt.Println(articleModelValidator.articleModel.Author.UserModel)
+	// Duplicate titles are allowed; each article still needs a unique slug.
+	articleModelValidator.articleModel.Slug = makeUniqueSlug(articleModelValidator.articleModel.Slug)
 
 	if err := SaveOne(&articleModelValidator.articleModel); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
@@ -89,36 +92,91 @@ func ArticleRetrieve(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("articles", errors.New("Invalid slug")))
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
 		return
 	}
 	serializer := ArticleSerializer{c, articleModel}
 	c.JSON(http.StatusOK, gin.H{"article": serializer.Response()})
 }
 
+// ArticleUpdate handles PUT /api/articles/:slug. The payload is parsed as raw
+// JSON so that omitted fields (including tagList) are preserved, while an
+// explicit null is rejected with 422.
 func ArticleUpdate(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("articles", errors.New("Invalid slug")))
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
 		return
 	}
 	// Check if current user is the author
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
 	articleUserModel := GetArticleUserModel(myUserModel)
 	if articleModel.AuthorID != articleUserModel.ID {
-		c.JSON(http.StatusForbidden, common.NewError("article", errors.New("you are not the author")))
+		c.JSON(http.StatusForbidden, common.NewErrorMessage("article", "forbidden"))
 		return
 	}
 
-	articleModelValidator := NewArticleModelValidatorFillWith(articleModel)
-	if err := articleModelValidator.Bind(c); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(err))
+	var req struct {
+		Article map[string]json.RawMessage `json:"article"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewErrorMessage("body", "is invalid"))
 		return
 	}
 
-	articleModelValidator.articleModel.ID = articleModel.ID
-	if err := articleModel.Update(articleModelValidator.articleModel); err != nil {
+	validationErrors := common.CommonError{Errors: map[string][]string{}}
+	updates := map[string]interface{}{}
+	for field, column := range map[string]string{"title": "title", "description": "description", "body": "body"} {
+		raw, ok := req.Article[field]
+		if !ok {
+			continue
+		}
+		var value *string
+		if err := json.Unmarshal(raw, &value); err != nil || value == nil || *value == "" {
+			validationErrors.Errors[field] = append(validationErrors.Errors[field], "can't be blank")
+			continue
+		}
+		if field == "title" && len(*value) < 4 {
+			validationErrors.Errors[field] = append(validationErrors.Errors[field], "is too short (minimum is 4 characters)")
+			continue
+		}
+		updates[column] = *value
+	}
+	// Changing the title regenerates the slug, as in the original RealWorld backends.
+	finalSlug := slug
+	if title, ok := updates["title"]; ok {
+		if newSlugBase := makeSlug(title.(string)); newSlugBase != articleModel.Slug {
+			finalSlug = makeUniqueSlug(newSlugBase)
+			updates["slug"] = finalSlug
+		}
+	}
+	var newTags *[]string
+	if raw, ok := req.Article["tagList"]; ok {
+		if err := json.Unmarshal(raw, &newTags); err != nil || newTags == nil {
+			validationErrors.Errors["tagList"] = append(validationErrors.Errors["tagList"], "can't be null")
+		}
+	}
+	if len(validationErrors.Errors) > 0 {
+		c.JSON(http.StatusUnprocessableEntity, validationErrors)
+		return
+	}
+
+	if len(updates) > 0 {
+		if err := articleModel.Update(updates); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+			return
+		}
+	}
+	if newTags != nil {
+		if err := articleModel.ReplaceTags(*newTags); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+			return
+		}
+	}
+
+	articleModel, err = FindOneArticle(&ArticleModel{Slug: finalSlug})
+	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
@@ -129,28 +187,28 @@ func ArticleUpdate(c *gin.Context) {
 func ArticleDelete(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
-	if err == nil {
-		// Article exists, check authorization
-		myUserModel := c.MustGet("my_user_model").(users.UserModel)
-		articleUserModel := GetArticleUserModel(myUserModel)
-		if articleModel.AuthorID != articleUserModel.ID {
-			c.JSON(http.StatusForbidden, common.NewError("article", errors.New("you are not the author")))
-			return
-		}
+	if err != nil {
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
+		return
 	}
-	// Delete regardless of existence (idempotent)
+	myUserModel := c.MustGet("my_user_model").(users.UserModel)
+	articleUserModel := GetArticleUserModel(myUserModel)
+	if articleModel.AuthorID != articleUserModel.ID {
+		c.JSON(http.StatusForbidden, common.NewErrorMessage("article", "forbidden"))
+		return
+	}
 	if err := DeleteArticleModel(&ArticleModel{Slug: slug}); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"article": "delete success"})
+	c.Status(http.StatusNoContent)
 }
 
 func ArticleFavorite(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("articles", errors.New("Invalid slug")))
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
@@ -166,7 +224,7 @@ func ArticleUnfavorite(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("articles", errors.New("Invalid slug")))
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
@@ -182,7 +240,7 @@ func ArticleCommentCreate(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("comment", errors.New("Invalid slug")))
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
 		return
 	}
 	commentModelValidator := NewCommentModelValidator()
@@ -201,35 +259,41 @@ func ArticleCommentCreate(c *gin.Context) {
 }
 
 func ArticleCommentDelete(c *gin.Context) {
+	slug := c.Param("slug")
+	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
+	if err != nil {
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
+		return
+	}
 	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("comment", errors.New("Invalid id")))
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("comment", "not found"))
 		return
 	}
 	id := uint(id64)
-	commentModel, err := FindOneComment(&CommentModel{Model: gorm.Model{ID: id}})
-	if err == nil {
-		// Comment exists, check authorization
-		myUserModel := c.MustGet("my_user_model").(users.UserModel)
-		articleUserModel := GetArticleUserModel(myUserModel)
-		if commentModel.AuthorID != articleUserModel.ID {
-			c.JSON(http.StatusForbidden, common.NewError("comment", errors.New("you are not the author")))
-			return
-		}
+	commentModel, err := FindOneComment(&CommentModel{Model: gorm.Model{ID: id}, ArticleID: articleModel.ID})
+	if err != nil {
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("comment", "not found"))
+		return
 	}
-	// Delete regardless of existence (idempotent)
+	myUserModel := c.MustGet("my_user_model").(users.UserModel)
+	articleUserModel := GetArticleUserModel(myUserModel)
+	if commentModel.AuthorID != articleUserModel.ID {
+		c.JSON(http.StatusForbidden, common.NewErrorMessage("comment", "forbidden"))
+		return
+	}
 	if err := DeleteCommentModel([]uint{id}); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"comment": "delete success"})
+	c.Status(http.StatusNoContent)
 }
 
 func ArticleCommentList(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("comments", errors.New("Invalid slug")))
+		c.JSON(http.StatusNotFound, common.NewErrorMessage("article", "not found"))
 		return
 	}
 	err = articleModel.getComments()
