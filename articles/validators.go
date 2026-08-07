@@ -54,6 +54,28 @@ func (s *ArticleModelValidator) Bind(c *gin.Context) error {
 	return nil
 }
 
+// ArticleUpdateValidator is the schema for PUT /api/articles/:slug. Nullable
+// fields give tri-state semantics: absent fields are skipped ("omitnil"),
+// null or blank fails "required" on the string fields, and an explicit null
+// tagList fails "notnull" (an empty tagList array is a valid value that
+// clears all tags).
+type ArticleUpdateValidator struct {
+	Article struct {
+		Title       common.Nullable[string]   `json:"title" binding:"omitnil,required,min=4"`
+		Description common.Nullable[string]   `json:"description" binding:"omitnil,required,max=2048"`
+		Body        common.Nullable[string]   `json:"body" binding:"omitnil,required,max=2048"`
+		TagList     common.Nullable[[]string] `json:"tagList" binding:"omitnil,notnull"`
+	} `json:"article"`
+}
+
+func NewArticleUpdateValidator() ArticleUpdateValidator {
+	return ArticleUpdateValidator{}
+}
+
+func (s *ArticleUpdateValidator) Bind(c *gin.Context) error {
+	return common.Bind(c, s)
+}
+
 type CommentModelValidator struct {
 	Comment struct {
 		Body string `form:"body" json:"body" binding:"required,max=2048"`

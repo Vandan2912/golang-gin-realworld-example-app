@@ -552,3 +552,93 @@ func TestMain(m *testing.M) {
 	common.TestDBFree(test_db)
 	os.Exit(exitVal)
 }
+
+// Covers the raw-JSON tri-state semantics of UserUpdate: omitted fields are
+// preserved, explicit null clears nullable fields and is rejected for
+// required ones, and password rules follow NIST 800-63B.
+func TestUserUpdateNullAndBlankSemantics(t *testing.T) {
+	asserts := assert.New(t)
+
+	r := gin.New()
+	r.Use(AuthMiddleware(true))
+	UserRegister(r.Group("/user"))
+	resetDBWithMock()
+
+	doPut := func(body string) *httptest.ResponseRecorder {
+		req, _ := http.NewRequest("PUT", "/user", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		common.HeaderTokenMock(req, 1)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	w := doPut(`{"user":{"email":null}}`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "null email should be rejected")
+	asserts.Contains(w.Body.String(), `"email":["can't be blank"]`)
+
+	w = doPut(`{"user":{"username":null}}`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "null username should be rejected")
+	asserts.Contains(w.Body.String(), `"username":["can't be blank"]`)
+
+	w = doPut(`{"user":{"password":""}}`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "blank password should be rejected")
+	asserts.Contains(w.Body.String(), `"password":["can't be blank"]`)
+
+	w = doPut(`{"user":{"password":"short7c"}}`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "7-char password should be rejected")
+	asserts.Contains(w.Body.String(), "is too short")
+
+	longPassword := string(bytes.Repeat([]byte("a"), 256))
+	w = doPut(fmt.Sprintf(`{"user":{"password":"%s"}}`, longPassword))
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "256-char password should be rejected")
+	asserts.Contains(w.Body.String(), "is too long")
+
+	w = doPut(`{"user":{"bio":123}}`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "non-string bio should be rejected")
+	asserts.Contains(w.Body.String(), `"bio":["is invalid"]`)
+
+	w = doPut(`{"user":{"image":[1]}}`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "non-string image should be rejected")
+	asserts.Contains(w.Body.String(), `"image":["is invalid"]`)
+
+	w = doPut(`{"user":`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "malformed JSON should be rejected")
+	asserts.Contains(w.Body.String(), `"body":["is invalid"]`)
+
+	// Nullable fields: explicit null and empty string both clear to null
+	w = doPut(`{"user":{"bio":null,"image":""}}`)
+	asserts.Equal(http.StatusOK, w.Code, "clearing bio and image should succeed")
+	asserts.Contains(w.Body.String(), `"bio":null`)
+	asserts.Contains(w.Body.String(), `"image":null`)
+
+	// Omitted fields are preserved
+	w = doPut(`{"user":{"bio":"kept bio"}}`)
+	asserts.Equal(http.StatusOK, w.Code, "partial update should succeed")
+	asserts.Contains(w.Body.String(), `"username":"user1"`)
+	asserts.Contains(w.Body.String(), `"bio":"kept bio"`)
+
+	// Valid password change is accepted (64 chars per NIST must be accepted)
+	okPassword := string(bytes.Repeat([]byte("a"), 64))
+	w = doPut(fmt.Sprintf(`{"user":{"password":"%s"}}`, okPassword))
+	asserts.Equal(http.StatusOK, w.Code, "64-char password should be accepted")
+}
+
+// Covers the 409 duplicate-email branch of UsersRegistration (the duplicate
+// username branch is exercised by the table-driven tests above).
+func TestUsersRegistrationDuplicateEmail(t *testing.T) {
+	asserts := assert.New(t)
+
+	r := gin.New()
+	UsersRegister(r.Group("/users"))
+	resetDBWithMock()
+
+	req, _ := http.NewRequest("POST", "/users", bytes.NewBufferString(
+		`{"user":{"username":"freshuser","email":"user1@linkedin.com","password":"password123"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	asserts.Equal(http.StatusConflict, w.Code, "duplicate email should return 409")
+	asserts.Contains(w.Body.String(), `"email":["has already been taken"]`)
+}

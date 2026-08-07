@@ -1,7 +1,6 @@
 package articles
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -99,9 +98,9 @@ func ArticleRetrieve(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"article": serializer.Response()})
 }
 
-// ArticleUpdate handles PUT /api/articles/:slug. The payload is parsed as raw
-// JSON so that omitted fields (including tagList) are preserved, while an
-// explicit null is rejected with 422.
+// ArticleUpdate handles PUT /api/articles/:slug. The schema's Nullable fields
+// preserve omitted keys (including tagList) and reject explicit null with 422;
+// validation runs declaratively via the binding tags during Bind.
 func ArticleUpdate(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
@@ -117,32 +116,28 @@ func ArticleUpdate(c *gin.Context) {
 		return
 	}
 
-	var req struct {
-		Article map[string]json.RawMessage `json:"article"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewErrorMessage("body", "is invalid"))
+	articleUpdateValidator := NewArticleUpdateValidator()
+	if err := articleUpdateValidator.Bind(c); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(err))
 		return
 	}
-
-	validationErrors := common.CommonError{Errors: map[string][]string{}}
-	updates := map[string]interface{}{}
-	for field, column := range map[string]string{"title": "title", "description": "description", "body": "body"} {
-		raw, ok := req.Article[field]
-		if !ok {
-			continue
-		}
-		var value *string
-		if err := json.Unmarshal(raw, &value); err != nil || value == nil || *value == "" {
-			validationErrors.Errors[field] = append(validationErrors.Errors[field], "can't be blank")
-			continue
-		}
-		if field == "title" && len(*value) < 4 {
-			validationErrors.Errors[field] = append(validationErrors.Errors[field], "is too short (minimum is 4 characters)")
-			continue
-		}
-		updates[column] = *value
+	// Past validation, every Set field holds a valid value.
+	var newTags *[]string
+	if f := articleUpdateValidator.Article.TagList; f.Set {
+		tags := f.Value
+		newTags = &tags
 	}
+	updates := map[string]interface{}{}
+	if f := articleUpdateValidator.Article.Title; f.Set {
+		updates["title"] = f.Value
+	}
+	if f := articleUpdateValidator.Article.Description; f.Set {
+		updates["description"] = f.Value
+	}
+	if f := articleUpdateValidator.Article.Body; f.Set {
+		updates["body"] = f.Value
+	}
+
 	// Changing the title regenerates the slug, as in the original RealWorld backends.
 	finalSlug := slug
 	if title, ok := updates["title"]; ok {
@@ -151,17 +146,6 @@ func ArticleUpdate(c *gin.Context) {
 			updates["slug"] = finalSlug
 		}
 	}
-	var newTags *[]string
-	if raw, ok := req.Article["tagList"]; ok {
-		if err := json.Unmarshal(raw, &newTags); err != nil || newTags == nil {
-			validationErrors.Errors["tagList"] = append(validationErrors.Errors["tagList"], "can't be null")
-		}
-	}
-	if len(validationErrors.Errors) > 0 {
-		c.JSON(http.StatusUnprocessableEntity, validationErrors)
-		return
-	}
-
 	if len(updates) > 0 {
 		if err := articleModel.Update(updates); err != nil {
 			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))

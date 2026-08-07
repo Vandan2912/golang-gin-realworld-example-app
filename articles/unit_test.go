@@ -2,6 +2,7 @@ package articles
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1602,4 +1603,64 @@ func TestMain(m *testing.M) {
 	exitVal := m.Run()
 	common.TestDBFree(test_db)
 	os.Exit(exitVal)
+}
+
+// Covers the tagList semantics of ArticleUpdate: omitted preserves, a new
+// array replaces (ReplaceTags), an empty array clears, null is rejected.
+func TestArticleUpdateTagListSemantics(t *testing.T) {
+	asserts := assert.New(t)
+
+	r := setupRouter()
+	user := createTestUser()
+	suffix := common.RandInt()
+
+	createBody := fmt.Sprintf(
+		`{"article":{"title":"Tag Semantics %d","description":"d","body":"b","tagList":["alpha%d","beta%d"]}}`,
+		suffix, suffix, suffix)
+	req, _ := http.NewRequest("POST", "/api/articles", bytes.NewBufferString(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	common.HeaderTokenMock(req, user.ID)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	asserts.Equal(http.StatusCreated, w.Code, "article with tags should be created")
+
+	var created struct {
+		Article struct {
+			Slug string `json:"slug"`
+		} `json:"article"`
+	}
+	asserts.NoError(json.Unmarshal(w.Body.Bytes(), &created))
+	slug := created.Article.Slug
+	asserts.NotEmpty(slug)
+
+	doPut := func(body string) *httptest.ResponseRecorder {
+		req, _ := http.NewRequest("PUT", "/api/articles/"+slug, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		common.HeaderTokenMock(req, user.ID)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// Omitted tagList preserves existing tags
+	w = doPut(`{"article":{"body":"updated body"}}`)
+	asserts.Equal(http.StatusOK, w.Code, "update without tagList should succeed")
+	asserts.Contains(w.Body.String(), fmt.Sprintf("alpha%d", suffix))
+	asserts.Contains(w.Body.String(), fmt.Sprintf("beta%d", suffix))
+
+	// A new array replaces the tag set
+	w = doPut(fmt.Sprintf(`{"article":{"tagList":["gamma%d"]}}`, suffix))
+	asserts.Equal(http.StatusOK, w.Code, "tagList replacement should succeed")
+	asserts.Contains(w.Body.String(), fmt.Sprintf("gamma%d", suffix))
+	asserts.NotContains(w.Body.String(), fmt.Sprintf("alpha%d", suffix))
+
+	// An empty array clears all tags
+	w = doPut(`{"article":{"tagList":[]}}`)
+	asserts.Equal(http.StatusOK, w.Code, "empty tagList should succeed")
+	asserts.Contains(w.Body.String(), `"tagList":[]`)
+
+	// Explicit null is rejected
+	w = doPut(`{"article":{"tagList":null}}`)
+	asserts.Equal(http.StatusUnprocessableEntity, w.Code, "null tagList should be rejected")
+	asserts.Contains(w.Body.String(), `"tagList"`)
 }

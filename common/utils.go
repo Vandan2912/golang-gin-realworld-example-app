@@ -68,7 +68,8 @@ type CommonError struct {
 
 // Maps Go struct field names to their JSON counterparts for error responses.
 var errorFieldNames = map[string]string{
-	"Tags": "tagList",
+	"Tags":    "tagList",
+	"TagList": "tagList",
 }
 
 func errorFieldName(field string) string {
@@ -82,6 +83,8 @@ func errorMessageForTag(v validator.FieldError) string {
 	switch v.Tag() {
 	case "required":
 		return "can't be blank"
+	case "notnull":
+		return "can't be null"
 	case "min":
 		return fmt.Sprintf("is too short (minimum is %v characters)", v.Param())
 	case "max":

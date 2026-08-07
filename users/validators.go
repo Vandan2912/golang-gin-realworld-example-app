@@ -60,6 +60,43 @@ func NewUserModelValidatorFillWith(userModel UserModel) UserModelValidator {
 	return userModelValidator
 }
 
+// UserUpdateValidator is the schema for PUT /api/user. Nullable fields give
+// tri-state semantics (absent / null / value); the binding tags apply to the
+// inner value via the valuer registered in common: "omitnil" skips absent
+// fields, null and "" fail "required" on identity fields, and null on the
+// tag-free bio/image fields is accepted (it clears them).
+type UserUpdateValidator struct {
+	User struct {
+		Username common.Nullable[string] `json:"username" binding:"omitnil,required,min=4,max=255"`
+		Email    common.Nullable[string] `json:"email" binding:"omitnil,required"`
+		Password common.Nullable[string] `json:"password" binding:"omitnil,required,min=8,max=255"`
+		Bio      common.Nullable[string] `json:"bio" binding:"omitnil"`
+		Image    common.Nullable[string] `json:"image" binding:"omitnil"`
+	} `json:"user"`
+}
+
+func NewUserUpdateValidator() UserUpdateValidator {
+	return UserUpdateValidator{}
+}
+
+func (self *UserUpdateValidator) Bind(c *gin.Context) error {
+	return common.Bind(c, self)
+}
+
+// InvalidFieldErrors reports fields whose values had the wrong JSON type
+// (e.g. a number for bio). The binding tags cannot see this case: the valuer
+// collapses it to the zero value, which tag-free nullable fields accept.
+func (self *UserUpdateValidator) InvalidFieldErrors() common.CommonError {
+	errs := common.CommonError{Errors: map[string][]string{}}
+	if self.User.Bio.Invalid {
+		errs.Errors["bio"] = append(errs.Errors["bio"], "is invalid")
+	}
+	if self.User.Image.Invalid {
+		errs.Errors["image"] = append(errs.Errors["image"], "is invalid")
+	}
+	return errs
+}
+
 type LoginValidator struct {
 	User struct {
 		Email    string `form:"email" json:"email" binding:"required,email"`

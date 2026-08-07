@@ -1,7 +1,6 @@
 package users
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -128,88 +127,41 @@ func UserRetrieve(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"user": serializer.Response()})
 }
 
-// unmarshalNullableString decodes a raw JSON value into a string pointer.
-// A JSON null yields (nil, true); a JSON string yields (&value, true).
-func unmarshalNullableString(raw json.RawMessage) (*string, bool) {
-	var value *string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, false
-	}
-	return value, true
-}
-
-// UserUpdate handles PUT /api/user. It parses the payload as raw JSON so that
-// omitted fields are preserved while explicit null clears nullable fields
-// (bio, image) and is rejected for required fields (username, email, password).
+// UserUpdate handles PUT /api/user. Validation is declarative: the schema's
+// binding tags run during Bind. The handler only applies the mutations —
+// absent fields are preserved, null/"" clears the nullable bio and image.
 func UserUpdate(c *gin.Context) {
 	myUserModel := c.MustGet("my_user_model").(UserModel)
-	var req struct {
-		User map[string]json.RawMessage `json:"user"`
+	userUpdateValidator := NewUserUpdateValidator()
+	if err := userUpdateValidator.Bind(c); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(err))
+		return
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewErrorMessage("body", "is invalid"))
+	if errs := userUpdateValidator.InvalidFieldErrors(); len(errs.Errors) > 0 {
+		c.JSON(http.StatusUnprocessableEntity, errs)
 		return
 	}
 
-	validationErrors := common.CommonError{Errors: map[string][]string{}}
-	newPassword := ""
-
-	if raw, ok := req.User["username"]; ok {
-		value, valid := unmarshalNullableString(raw)
-		if !valid || value == nil || *value == "" {
-			validationErrors.Errors["username"] = append(validationErrors.Errors["username"], "can't be blank")
-		} else {
-			myUserModel.Username = *value
-		}
+	// Past validation, a Set identity field is always a valid non-blank value.
+	if f := userUpdateValidator.User.Username; f.Set {
+		myUserModel.Username = f.Value
 	}
-	if raw, ok := req.User["email"]; ok {
-		value, valid := unmarshalNullableString(raw)
-		if !valid || value == nil || *value == "" {
-			validationErrors.Errors["email"] = append(validationErrors.Errors["email"], "can't be blank")
-		} else {
-			myUserModel.Email = *value
-		}
+	if f := userUpdateValidator.User.Email; f.Set {
+		myUserModel.Email = f.Value
 	}
-	if raw, ok := req.User["password"]; ok {
-		value, valid := unmarshalNullableString(raw)
-		switch {
-		case !valid || value == nil || *value == "":
-			validationErrors.Errors["password"] = append(validationErrors.Errors["password"], "can't be blank")
-		case len(*value) < 8:
-			validationErrors.Errors["password"] = append(validationErrors.Errors["password"], "is too short (minimum is 8 characters)")
-		case len(*value) > 255:
-			validationErrors.Errors["password"] = append(validationErrors.Errors["password"], "is too long (maximum is 255 characters)")
-		default:
-			newPassword = *value
-		}
+	if f := userUpdateValidator.User.Bio; f.Set {
+		myUserModel.Bio = f.Value // zero value on null: clears
 	}
-	if raw, ok := req.User["bio"]; ok {
-		value, valid := unmarshalNullableString(raw)
-		if !valid {
-			validationErrors.Errors["bio"] = append(validationErrors.Errors["bio"], "is invalid")
-		} else if value == nil {
-			myUserModel.Bio = ""
-		} else {
-			myUserModel.Bio = *value
-		}
-	}
-	if raw, ok := req.User["image"]; ok {
-		value, valid := unmarshalNullableString(raw)
-		if !valid {
-			validationErrors.Errors["image"] = append(validationErrors.Errors["image"], "is invalid")
-		} else if value == nil || *value == "" {
+	if f := userUpdateValidator.User.Image; f.Set {
+		if !f.Valid || f.Value == "" {
 			myUserModel.Image = nil
 		} else {
-			myUserModel.Image = value
+			value := f.Value
+			myUserModel.Image = &value
 		}
 	}
-
-	if len(validationErrors.Errors) > 0 {
-		c.JSON(http.StatusUnprocessableEntity, validationErrors)
-		return
-	}
-	if newPassword != "" {
-		if err := myUserModel.setPassword(newPassword); err != nil {
+	if f := userUpdateValidator.User.Password; f.Set {
+		if err := myUserModel.setPassword(f.Value); err != nil {
 			c.JSON(http.StatusUnprocessableEntity, common.NewError("password", err))
 			return
 		}
