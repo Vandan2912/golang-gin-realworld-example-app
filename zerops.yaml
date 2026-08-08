@@ -1,0 +1,17 @@
+zerops:
+  - setup: api
+    build:
+      base: go@1.22
+      buildCommands:
+        - go build -o main .
+      deployFiles: ./
+    run:
+      base: go@1.22
+      ports:
+        - port: 8080
+          httpSupport: true
+      start: ./main
+      envVariables:
+        GIN_MODE: release
+        DB_PATH: ./data/gorm.db
+        PORT: '8080'
