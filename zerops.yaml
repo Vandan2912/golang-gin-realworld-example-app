@@ -2,10 +2,9 @@ zerops:
   - setup: api
     build:
       base: go@1.22
+      prepareCommands:
+        - sudo apt-get update && sudo apt-get install -y gcc libc6-dev
       buildCommands:
-        - >-
-          sh -c 'command -v apk >/dev/null 2>&1 && apk add --no-cache gcc musl-dev || (command -v
-          apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y gcc libc6-dev) || true'
         - go build -o app .
       deployFiles: ./
       envVariables:
