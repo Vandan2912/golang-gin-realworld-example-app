@@ -3,15 +3,18 @@ zerops:
     build:
       base: go@1.22
       buildCommands:
-        - go build -o main .
+        - >-
+          sh -c 'command -v apk >/dev/null 2>&1 && apk add --no-cache gcc musl-dev || (command -v
+          apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y gcc libc6-dev) || true'
+        - go build -o app .
       deployFiles: ./
     run:
       base: go@1.22
       ports:
         - port: 8080
           httpSupport: true
-      start: ./main
+      start: ./app
       envVariables:
+        CGO_ENABLED: '1'
         GIN_MODE: release
-        DB_PATH: ./data/gorm.db
         PORT: '8080'
