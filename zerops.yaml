@@ -8,6 +8,11 @@ zerops:
           apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y gcc libc6-dev) || true'
         - go build -o app .
       deployFiles: ./
+      envVariables:
+        CGO_ENABLED: '1'
+        GIN_MODE: release
+        DB_PATH: ./data/gorm.db
+        PORT: '8080'
     run:
       base: go@1.22
       ports:
@@ -17,4 +22,5 @@ zerops:
       envVariables:
         CGO_ENABLED: '1'
         GIN_MODE: release
+        DB_PATH: ./data/gorm.db
         PORT: '8080'
